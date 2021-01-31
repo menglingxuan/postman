@@ -13,8 +13,12 @@ __all__ = [
     "CommonController"
 ]
 
+import sys
 
+from datetime import datetime
+from traceback import format_exc
 from aiohttp import web, MultipartReader
+from .features import FeatureError, decrypt
 
 
 @web.middleware
@@ -37,5 +41,21 @@ class CommonController(object):
         print(request.match_info)
         print(request.query)
         print()
-        resp = await handler(request)
-        return resp
+        try:
+            response = await decrypt(request.cookies)
+            if not isinstance(response, web.Response):
+                raise FeatureError("unexpected feature's output")
+        except BaseException as error:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+            return web.json_response(data=dict(
+                msg="error",
+                desc=str(error),
+                timestamp=timestamp,
+                stack=format_exc().split("\n")
+            ))
+        else:
+            return response
+
+        """ pong """
+        # resp = await handler(request)
+        # return resp

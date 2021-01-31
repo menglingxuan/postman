@@ -10,7 +10,7 @@ DESCRIPTION:
 
 from argparse import ArgumentParser
 from aiohttp import web
-from .midllewares import CommonController
+from .controller import CommonController
 from .handlers import ViewController
 
 
