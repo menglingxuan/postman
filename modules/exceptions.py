@@ -1,52 +1,21 @@
 # -*- encoding: utf-8 -*-
-"""
-    InternalError
-        DefinitionError
-        ParamError
-    FeatureError
-        ExecutorError
-            GuessError
-    FeatureWarning
-        ExecutorWarning
-"""
 
 
-from .doc import DocMixIn
+__all__ = [
+    "SystemError",
+    "FeatureError",
+    "FeatureWarning"
+]
 
 
-class InternalError(Exception, DocMixIn):
+class SystemError(Exception):
     def __init__(self):
-        self.args = ("内部错误", )
+        self.args = ("系统错误", )
 
 
-class DefinitionError(InternalError):
-    def __init__(self):
-        self.args = ("定义错误", )
-
-
-class ParamError(InternalError):
-    def __init__(self):
-        self.args = ("传参错误", )
-
-
-class FeatureError(Exception, DocMixIn):
-    pass
-
-
-class ExecutorError(FeatureError):
-    pass
-
-
-class GuessError(FeatureError):
+class FeatureError(Exception):
     pass
 
 
 class FeatureWarning(UserWarning):
     pass
-
-
-class ExecutorWarning(FeatureWarning):
-    pass
-
-
-__all__ = list(globals().keys())

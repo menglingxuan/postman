@@ -47,13 +47,13 @@ class CommonController(object):
     @classmethod
     async def request_common(cls, request, handler):
         with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("default", e.ExecutorWarning)
+            warnings.simplefilter("default", UserWarning)
             try:
                 response = await feature_it(request)
                 if not isinstance(response, web.Response):
-                    raise SystemError("系统错误")
+                    raise e.FeatureError("系统错误")
             except BaseException as err:
-                warns = list(map(lambda y: str(y.message), filter(lambda x: issubclass(x.category, e.FeatureWarning), w)))
+                warns = list(map(lambda y: str(y.message), filter(lambda x: issubclass(x.category, UserWarning), w)))
                 exception = str(err)
                 stack = format_exc()
                 log.server_logger.error(stack)
@@ -63,8 +63,8 @@ class CommonController(object):
                     msg="error",
                     desc=exception,
                     data=None,
-                    warn=warns,
-                    stack=stack
+                    stack=stack,
+                    warnings=warns
                 ))
             else:
                 return response

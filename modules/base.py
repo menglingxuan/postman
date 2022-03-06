@@ -4,31 +4,30 @@
 __all__ = [
     "FeatureResult",
     "FeatureCfg",
+    "Cfg",
     "Feature",
     "feature_it",
     "ModelCfgType",
-    "Cfg"
+    "CfgSectionType",
+    "make_lazy_type"
 ]
 
 
-import re
-import json
-import dataclasses
-
-from abc import abstractmethod, ABC
-from typing import Any
 from collections import UserDict
+from abc import abstractmethod, ABC
 from aiohttp.web import Response, json_response
+from . import (t, e, re, sys, log, json, dataclass,
+               dataclasses, Any, Union, AESDecrypter)
 
-from . import t, e, AESDecrypter
 
-
-@dataclasses.dataclass()
+@dataclass()
 class FeatureResult(object):
     data: Any
     errno: int = 0
     msg: str = "ok"
     desc: str = ""
+    warnings: Union[list, tuple] = ()
+
     as_raw: bool = False
     is_json: bool = False
     is_bytes: bool = False
@@ -49,7 +48,7 @@ class FeatureResult(object):
             #     data_type=data_type,
             #     ori_extra_keys=list(self._ori_extra.keys())
             # )))
-            raise e.ParamError()
+            raise e.SystemError
 
         if self.as_raw:
             params = dict(text=self.data, content_type="text/plain")
@@ -66,51 +65,48 @@ class FeatureResult(object):
             msg=self.msg,
             data=self.data,
             desc=self.desc,
-            warn=[]
+            warnings=self.warnings
         ), **params)
 
 
+# as decorator
 class FeatureCfg(UserDict):
-    """ make it as decorator """
+    # __parent_path__ = "config.remote.middlewares"
+    __parent_path__ = ""
+
     def __call__(self, cls: 'Feature'):
-        self.__annotations = self.data
+        self.__annotations__ = self.data
         self.__belong_to = cls.__name__
-        self.data = dict.fromkeys(self.__annotations.keys())
+        self.data = dict.fromkeys(self.__annotations__.keys())
         cls.init_cfg_meta(self)
         return cls
 
-    @property
-    def annotations(self):
-        return self.__annotations
-
     def update_cfg(self, user_cfg: dict):
-        annotations = self.__annotations.copy()
+        annotations = self.__annotations__.copy()
         for key, value in user_cfg.items():
             ano = annotations.pop(key, None)
             if ano is None:
-                raise SystemError(f"未定义的特性参数: \"{key}\"。支持的特性参数: {annotations.keys()!s}")
+                raise e.FeatureError(f"未定义的配置参数: {key}。支持的配置参数: {annotations.keys()!s}")
             if not isinstance(ano, type):
-                raise e.DefinitionError()
-            if isinstance(ano, ModelCfgType) and ano in annotations.values():
-                # 每一个 <ModelCfgType> 实例只能定义一次
-                raise e.DefinitionError()
+                raise e.SystemError
+            # if isinstance(ano, ModelCfgType) and ano in annotations.values():
+            #     # 每一个 <ModelCfgType> 实例只能定义一次
+            #     raise e.SystemError
             if not isinstance(value, ano):
                 t.chain_reason(key, value, ano)
-                raise SystemError(f"特性参数值错误或类型错误: {t.reason(chain_info=True)}")
+                raise e.FeatureError(f"配置参数值错误或类型错误: {t.reason(chain_info=True)}")
             self.data[key] = value
-        return self
 
 
 """ alias"""
 Cfg = FeatureCfg
 
 
-_trans_token = "thisIsToken"
 _resultCls_fields = tuple([field.name for field in dataclasses.fields(FeatureResult)])
 
 
 class Feature(ABC):
-    cookie_prefix = "X-POSTMAN-DATA-"
+    # cookie_prefix = "X-POSTMAN-DATA-"
 
     def __init__(self, name, data: str, cfg: dict):
         self.name = name
@@ -119,7 +115,7 @@ class Feature(ABC):
 
     def __init_subclass__(cls, **kwargs):
         if not re.match(r"^Feature[A-Z][A-Z_a-z]+$", cls.__name__):
-            raise e.DefinitionError()
+            raise e.SystemError
 
     def _init_cfg(self, cfg: dict):
         user_cfg: Cfg = self.__class__.__cfg
@@ -139,7 +135,7 @@ class Feature(ABC):
         kwargs["_ori_extra"] = _ori_extra
         return FeatureResult(data, **kwargs)
 
-    """ 去重首尾空格"""
+    """ /converter：去重首尾空格"""
     @property
     def pure_data(self):
         return self.data.strip()
@@ -149,94 +145,185 @@ class Feature(ABC):
         raise NotImplementedError(f"此功能未实现: \"/{self.name}\"")
 
 
-# Deprecated!!!
-def _get_things_from_cookies(cookies):
-    args = [None] * len(cookies)
-    for i, key in enumerate(cookies.keys()):
-        if not key.startswith(Feature.cookie_prefix):
-            continue
-        [_, index] = key.split(Feature.cookie_prefix)
-        if re.search(r"^[0-9]+$", index) is None:
-            continue
-        args[int(index)] = cookies.get(key)
-    args = list(filter(None, args))
-    if not len(args):
-        raise SystemError(f"请求未包含有效的cookie: \"{Feature.cookie_prefix}*\"")
-    return "".join(args)
-
-
 def add_response_header(resp: Response, feature):
     resp.headers.setdefault("Postman-Feature-Name", feature)
 
 
 async def feature_it(request) -> Response:
-    if request.headers.getone("Postman-Feature-Name", None) is not None:
-        encrypted = await request.text()
-    else:
-        # encrypted = _get_things_from_cookies(request.cookies)
+    if request.headers.getone("Postman-Feature-Name", None) is None:
         raise Exception("未授权的请求，请勿直接请求")
-    text = AESDecrypter.decrypt(_trans_token, encrypted)
 
+    encrypted = await request.text()
+    project_settings = request.app["settings"]["project"]
+    trans_token = project_settings.get("token", "xxx")
+    text = AESDecrypter.decrypt(trans_token, encrypted)
     name, cfg, data = text.split("|", 2)
     try:
         module = __import__(f"features.{name}", globals=globals(), fromlist=["FeatureCls"], level=2)
     except ImportError:
-        raise NotImplementedError(f"此功能未实现: \"/{name}\"")
+        raise NotImplementedError(f"此功能未实现：‘/{name}’")
     else:
+        if not hasattr(module, "FeatureCls"):
+            raise e.SystemError
         feature_cls = module.FeatureCls
-        cfg = json.loads(AESDecrypter.decrypt(_trans_token, cfg))
+        try:
+            cfg = json.loads(AESDecrypter.decrypt(trans_token, cfg))
+        except json.JSONDecodeError:
+            raise e.SystemError
+        log.info("接收到的配置参数：%s", json.dumps(cfg, indent=2))
         result = await feature_cls(name, data, cfg).feature_it()
         if not isinstance(result, FeatureResult):
-            raise e.DefinitionError()
+            raise e.SystemError
         response = result.as_response()
         add_response_header(response, name)
         return response
 
 
-class ModelCfgType(type):
+class ModelCfgType(t._S):
+    @classmethod
+    def __prepare__(metacls, name, bases, **kwargs):
+        return dict(__getitem__=metacls.__cls_getitem__,
+                    __post_init__=metacls.__cls_post_init__,
+                    keys=metacls.__cls_keys__,
+                    get=metacls.__cls_get__,
+                    getmany=metacls.__cls_getmany__,
+                    update=metacls.__cls_update__)
+
+    def __repr__(self):
+        if hasattr(self, "_is_lazy"):
+            return f"ModelCfgType::<{self.__name__}[\"{getattr(self, '_lazy_module_attr')}\"]>"
+        return f"ModelCfgType::<{self.__module__}.{self.__name__}>"
+
+    def __cls_getitem__(self, item):
+        return dict.__getitem__(self.__dict__, item)
+
+    def __cls_keys__(self, all=False):
+        for k in self.__dict__.keys():
+            if k == "__parent_path__":
+                continue
+            if all:
+                yield k
+            if self.__dict__[k] is not None:
+                yield k
+
+    def __cls_get__(self, item, default=None):
+        return dict.get(self.__dict__, item, default)
+
+    def __cls_getmany__(self, items, defaults=None):
+        if defaults is None:
+            defaults = (None for x in items)
+        return [self.get(item, default) for item, default in zip(items, defaults)]
+
+    def __cls_update__(self, **kwargs):
+        for key, value in kwargs.items():
+            fld = self.__dataclass_fields__.get(key, None)
+            if fld is None:
+                raise e.SystemError
+            if not isinstance(value, fld.type):
+                raise e.SystemError
+            setattr(self, key, value)
+
+    def __cls_post_init__(self, config_parent_path):
+        self.__parent_path__ = config_parent_path
+        for attr, field in self.__dataclass_fields__.items():
+            if len(field.metadata) > 0:
+                this_path = self.__parent_path__ + "." + attr
+                t.CommonChecker(self, attr, field, this_path)
+
     def __instancecheck__(self, instance):
         if not isinstance(instance, dict):
             return False
         if not dataclasses.is_dataclass(self):
-            raise e.DefinitionError()
+            raise e.SystemError
+        # for lazy type
+        if hasattr(self, "_is_lazy"):
+            return True
 
         model_cfg: dict = instance.copy()
         fields: tuple[dataclasses.Field] = dataclasses.fields(self)
         for field in fields:
-            key, typ = (field.name, field.type)
-            is_missing = field.default == dataclasses.MISSING
-            value = model_cfg.pop(key, None if is_missing else field.default)
-            if is_missing and value is None:
+            key, typ = field.name, field.type
+            default_value = dataclasses.MISSING
+            if field.default != dataclasses.MISSING:
+                default_value = field.default
+            elif field.default_factory != dataclasses.MISSING:
+                default_value = field.default_factory()
+            still_missing = default_value == dataclasses.MISSING
+            value = model_cfg.pop(key, None if still_missing else default_value)
+            if still_missing and value is None:
                 t.chain_reason(key, value, typ)
                 return False
             if not isinstance(value, typ):
                 t.chain_reason(key, value, typ)
                 return False
+            # for lazy type: 变量 typ 是动态生成的独立实例类，不是模块共享的
+            if hasattr(typ, "_is_lazy"):
+                typ._lazy_key = key
         if len(model_cfg) > 0:
-            non_supports = list(model_cfg.keys())
-            t.reason(f"不支持的特性参数。支持的特性参数：{self.__doc__}")
-            t.chain_reason(f"{non_supports!s}", instance, self)
+            non_support_fields = ",".join(model_cfg.keys())
+            t.reason(f"不支持的配置参数。{self.__doc__}")
+            t.chain_reason(f"<{non_support_fields}>", instance, self)
             return False
         return True
 
-    def get_model_cfg(cls, user_cfg: FeatureCfg):
-        if not dataclasses.is_dataclass(cls):
-            raise e.DefinitionError()
+    def _recheck_lazy_type(cls, field, model_cfg, lazy_module_name, lazy_module_abspath):
+        if not hasattr(field.type, "_is_lazy"):
+            return
+        lazy_attr_name = getattr(field.type, "_lazy_module_attr")
+        real_module = sys.modules[lazy_module_abspath]
+        real_type = getattr(real_module, lazy_attr_name, None)
+        if real_type is None:
+            raise e.SystemError
+        if not isinstance(model_cfg.get(field.name, None), real_type):
+            raise e.FeatureError(f"{lazy_module_name}.{field.name}.{t.reason(chain_info=True)}")
+        cls.__annotations__[field.name] = real_type
 
-        annotations = user_cfg.annotations
-        for key, typ in annotations.items():
+    def get_model_cfg(cls, user_cfg: Union[FeatureCfg, 'ModelCfgType'], *,
+                      lazy_module_name=None,
+                      lazy_module_abspath=None):
+        if not dataclasses.is_dataclass(cls):
+            raise e.SystemError
+        for key, typ in user_cfg.__annotations__.items():
+            if key == "__parent_path__":
+                continue
             if typ is cls:
                 model_key = key
                 break
         else:
-            raise e.DefinitionError()
-        model_cfg: dict = user_cfg.pop(model_key)
+            raise e.SystemError
+        if isinstance(user_cfg, FeatureCfg):
+            model_cfg: dict = user_cfg.pop(model_key)
+        else:
+            model_cfg: dict = getattr(user_cfg, model_key)
+            delattr(user_cfg, model_key)
         args = []
         fields: tuple[dataclasses.Field] = dataclasses.fields(cls)
         for field in fields:
-            if field.default == dataclasses.MISSING:
+            cls._recheck_lazy_type(field, model_cfg, lazy_module_name, lazy_module_abspath)
+            default_value = dataclasses.MISSING
+            if field.default != dataclasses.MISSING:
+                default_value = field.default
+            elif field.default_factory != dataclasses.MISSING:
+                default_value = field.default_factory()
+            if default_value == dataclasses.MISSING:
                 args.append(model_cfg.pop(field.name))
                 continue
-            model_cfg.setdefault(field.name, field.default)
+            model_cfg.setdefault(field.name, default_value)
         rest_kwargs = model_cfg
-        return cls(*args, **rest_kwargs)
+        config_parent_path = (user_cfg.__parent_path__ + "." + model_key).lstrip(".")
+        if lazy_module_name is not None:
+            config_parent_path += "." + lazy_module_name
+        return cls(config_parent_path, *args, **rest_kwargs)
+
+
+class CfgSectionType(ModelCfgType):
+    pass
+
+
+def make_lazy_type(keyname):
+    _LAZY_UPDATE = ""
+    return dataclass(type.__new__(
+        ModelCfgType, "_DynamicLazyType", (object, ), dict(_is_lazy=True,
+                                                           _lazy_key=_LAZY_UPDATE,
+                                                           _lazy_module=_LAZY_UPDATE,
+                                                           _lazy_module_attr=keyname)))
