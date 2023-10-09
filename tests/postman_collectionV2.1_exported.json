@@ -1,0 +1,51 @@
+{
+	"info": {
+		"_postman_id": "3a97636f-8d33-4342-836c-19bb001dda5f",
+		"name": "Newman Testing",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+            "name": "New Request",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "http://127.0.0.1:10999/echo",
+                    "protocol": "http",
+                    "host": [
+                        "127",
+                        "0",
+                        "0",
+                        "1"
+                    ],
+                    "port": "10999",
+                    "path": [
+                        "echo"
+                    ]
+                },
+				"body": {
+					"mode": "raw",
+					"raw": "data"
+				}
+            },
+            "response": []
+        }
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": []
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": []
+			}
+		}
+	]
+}

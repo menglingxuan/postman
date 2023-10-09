@@ -1,0 +1,3 @@
+# pyproject.toml
+[tool.pytest.ini_options]
+collection_file = "postman_collectionV2.1_template.json"

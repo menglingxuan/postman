@@ -58,7 +58,7 @@ def _make(typ):
 
 
 def _is_net_complex_t(typ):
-    return typ in (str, int, float, bool, dict, list) \
+    return (typ in (str, int, float, bool, dict, list)) \
            or issubclass(typ, _T) \
            or isinstance(typ, _S)
 

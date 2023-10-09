@@ -1,12 +1,7 @@
 # -*- encoding: utf-8 -*-
 
 
-__all__ = [
-    "ConnectorConfig"
-]
-
-
-from mysql.connector.pooling import MySQLConnectionPool
+from mysql.connector.pooling import MySQLConnectionPool, PooledMySQLConnection
 from mysql.connector.cursor import MySQLCursor, MySQLCursorDict
 from mysql.connector.errors import Error as MySQLError
 from mysql.connector import errorcode
@@ -14,12 +9,8 @@ from itertools import chain
 
 from .. import (e, t, os, log, Any, Union, Path, dataclass, field, InitVar,
                 ModelCfgType, CfgSectionType, ExecutorAbstract)
-
-
-T = t.Optional[str]
-S = t.Optional[int]
-U = t.Optional[bool]
-V = t.Optional[t.Union[list, tuple]]
+from . import PoolManager
+from . import OptStr, OptInt, OptBool, OptList, OptDict
 
 
 class MySQLConfigType(ModelCfgType):
@@ -31,55 +22,55 @@ class ConnectorConfig(metaclass=MySQLConfigType):
     __parent_path__: InitVar[str]
     # 连接参数文档： https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
     # 屏蔽了部分对本程序而言无实际作用的参数
-    user: T                     = None
-    username: T                 = None   # user 的别名
-    password: T                 = None
-    passwd: T                   = None   # password 的别名
-    password1: T                = None
-    password2: T                = None
-    password3: T                = None
-    database: T                 = None
-    db: T                       = None   # database 的别名
-    host: T                     = None
-    port: S                     = None
-    unix_socket: T              = None
-    auth_plugin: T              = None
-    # use_unicode: U            = None
-    charset: T                  = None
-    collation: T                = None
-    # autocommit: U             = None
-    time_zone: T                = None
-    sql_mode: T                 = None
-    get_warnings: U             = None
-    raise_on_warnings: U        = None
-    connection_timeout: S       = None
-    connect_timeout: S          = None    # connection_timeout 的别名
-    client_flags: V             = None
-    # buffered: U               = None
-    # raw: U                    = None
-    # consume_results: U        = None
-    tls_versions: V             = None
-    ssl_ca: T                   = None
-    ssl_cert: T                 = None
-    ssl_disabled: U             = None
-    ssl_key: T                  = None
-    ssl_verify_cert: U          = None
-    ssl_verify_identity: U      = None
-    force_ipv6: U               = None
-    oci_config_file: T          = None
-    dsn: T                      = None
-    # pool_name: T                = None
-    pool_size: S                = None
-    pool_reset_session: U       = None
-    compress: U                 = None
-    # converter_class: Any      = None
-    # converter_str_fallback: U = None
-    # failover: V               = None
-    option_files: V             = None
-    option_groups: V            = None
-    # allow_local_infile: U       = None
-    # use_pure: U                 = None
-    krb_service_principal: T    = None
+    user:                       OptStr          = None
+    username:                   OptStr          = None   # user 的别名
+    password:                   OptStr          = None
+    passwd:                     OptStr          = None   # password 的别名
+    password1:                  OptStr          = None
+    password2:                  OptStr          = None
+    password3:                  OptStr          = None
+    database:                   OptStr          = None
+    db:                         OptStr          = None   # database 的别名
+    host:                       OptStr          = None
+    port:                       OptInt          = None
+    unix_socket:                OptStr          = None
+    auth_plugin:                OptStr          = None
+    # use_unicode:              OptBool           = None
+    charset:                    OptStr          = None
+    collation:                  OptStr          = None
+    # autocommit:               OptBool           = None
+    time_zone:                  OptStr          = None
+    sql_mode:                   OptStr          = None
+    get_warnings:               OptBool         = None
+    raise_on_warnings:          OptBool         = None
+    connection_timeout:         OptInt          = None
+    connect_timeout:            OptInt          = None    # connection_timeout 的别名
+    client_flags:               OptList         = None
+    # buffered:                 OptBool           = None
+    # raw:                      OptBool           = None
+    # consume_results:          OptBool           = None
+    tls_versions:               OptList         = None
+    ssl_ca:                     OptStr          = None
+    ssl_cert:                   OptStr          = None
+    ssl_disabled:               OptBool         = None
+    ssl_key:                    OptStr          = None
+    ssl_verify_cert:            OptBool         = None
+    ssl_verify_identity:        OptBool         = None
+    force_ipv6:                 OptBool         = None
+    oci_config_file:            OptStr          = None
+    dsn:                        OptStr          = None
+    # pool_name:                OptStr            = None
+    pool_size:                  OptInt          = None
+    pool_reset_session:         OptBool         = None
+    compress:                   OptBool         = None
+    # converter_class:          Any               = None
+    # converter_str_fallback:   OptBool           = None
+    # failover:                 OptList           = None
+    option_files:               OptList         = None
+    option_groups:              OptList         = None
+    # allow_local_infile:       OptBool           = None
+    # use_pure:                 OptBool           = None
+    krb_service_principal:      OptStr          = None
 
     """ ***.keys()][1:]: 移除 __parent_path__ 属性 """
     @classmethod
@@ -127,15 +118,13 @@ class MainConfig(metaclass=CfgSectionType):
 """
 
 
-# singleton class
-class _MySQLConnectionPools():
-    _pools = dict()
-    _digests = dict()
+class PoolManager(PoolManager):
 
-    @classmethod
-    def _create_pool(cls, server_name, dbconfig):
+    middleware_type = "mysql"
+
+    def create_pool(self, server_name, dbconfig):
         cnx_pool = MySQLConnectionPool(
-            pool_name = "pool#" + server_name,
+            pool_name="pool#" + server_name,
             # pool_size = 3,
             # 内部代码其实会尝试先调用 cnx.cmd_reset_connection() 方法，不支持时回滚到 cnx.reset_session()方法
             # pool_reset_session=True,
@@ -143,19 +132,15 @@ class _MySQLConnectionPools():
         )
         # 提供了 dbconfig 参数时，显式实例化连接池对象后内部代码其实会立即加满最大数量的连接
         # 因此无需再手动调用 pool.add_connection() 方法，多余的调用反而导致溢出连接池大小从而抛出错误
-        cls._pools[server_name] = cnx_pool
         return cnx_pool
 
-    @classmethod
-    def get_pool(cls, server_name, dbconfig, config_digest: int):
-        old_digest = cls._digests.get(server_name, None)
-        pool: MySQLConnectionPool = cls._pools.get(server_name,
-                                                    cls._create_pool(server_name, dbconfig))
-        if old_digest != config_digest:
-            if old_digest is not None:
-                pool.set_config(**dbconfig)
-            cls._digests[server_name] = config_digest
-        return pool
+    def update_conn_config(self, pool, dbconfig):
+        pool.set_config(**dbconfig)
+
+    def teardown_pool(self):
+        for pool in self._pools.values():
+            # 移除连接池中的所有连接，该方法中已包含错误捕获
+            pool._remove_connections()
 
 
 _support_statements = (
@@ -191,8 +176,8 @@ class Executor(ExecutorAbstract):
         return
 
     @classmethod
-    def _execone(cls, connection, statement, query_config):
-        log.info("执行SQL查询：%s", statement)
+    def _execone(cls, connection, statement, query_config: QueryConfig):
+        log.info("MySQL: 执行SQL查询：%s", statement)
         cursor: MySQLCursor = connection.cursor()
         cnx_interruped = False
         try:
@@ -233,7 +218,7 @@ class Executor(ExecutorAbstract):
         config_digest: int = hash(str(dbconfig))
         host, port, socket = dbconfig.getmany(("host", "port", "unix_socket"), ("127.0.0.1", 3306, ""))
         server_tag = f"{host}#{port}#{socket}"
-        pool = _MySQLConnectionPools.get_pool(server_tag, dbconfig, config_digest)
+        pool = PoolManager.get()._get_pool(server_tag, dbconfig, config_digest)
         pooled_connection = pool.get_connection()
         # pooled_connection.get_warnings = True
         main_config = MainConfig.get_model_cfg(cfg)
